@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net - Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Standard Helpers
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Players collection rules
+    match /players/{playerId} {
+      allow get: if true;
+      allow list: if true;
+      
+      allow create: if isValidId(playerId) 
+        && incoming().gameName is string && incoming().gameName.size() <= 64
+        && incoming().tagLine is string && incoming().tagLine.size() <= 16
+        && (incoming().puuid == null || incoming().puuid is string)
+        && (incoming().rank == null || incoming().rank is string)
+        && (incoming().level == null || incoming().level is int);
+
+      allow update: if isValidId(playerId)
+        && incoming().gameName == existing().gameName
+        && incoming().tagLine == existing().tagLine
+        && (incoming().puuid == null || incoming().puuid is string)
+        && (incoming().rank == null || incoming().rank is string)
+        && (incoming().level == null || incoming().level is int);
+    }
+
+    // 3. Subcollection Match details
+    match /players/{playerId}/matches/{matchId} {
+      allow get: if true;
+      allow list: if true;
+
+      allow create: if isValidId(playerId) && isValidId(matchId)
+        && incoming().matchId == matchId
+        && incoming().map is string && incoming().map.size() <= 64
+        && incoming().agent is string && incoming().agent.size() <= 64
+        && incoming().result in ['win', 'loss']
+        && incoming().kills is int
+        && incoming().deaths is int
+        && incoming().assists is int
+        && incoming().score is int
+        && (incoming().headshotPercentage is float || incoming().headshotPercentage is int)
+        && incoming().matchDate is string;
+    }
+  }
+}

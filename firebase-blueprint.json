@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "Player": {
+      "title": "Player Profile",
+      "description": "Saved player profiles and query histories",
+      "type": "object",
+      "properties": {
+        "gameName": { "type": "string", "description": "Riot gameplay name" },
+        "tagLine": { "type": "string", "description": "Riot tagline (without # symbol)" },
+        "puuid": { "type": "string", "description": "Riot unique account ID" },
+        "savedAt": { "type": "string", "format": "date-time", "description": "When player was registered" },
+        "rank": { "type": "string", "description": "Current valorant rank" },
+        "level": { "type": "integer", "description": "Account level" }
+      },
+      "required": ["gameName", "tagLine"]
+    },
+    "Match": {
+      "title": "Match Record",
+      "description": "Details of valorant match history",
+      "type": "object",
+      "properties": {
+        "matchId": { "type": "string" },
+        "map": { "type": "string" },
+        "agent": { "type": "string" },
+        "result": { "type": "string", "enum": ["win", "loss"] },
+        "kills": { "type": "integer" },
+        "deaths": { "type": "integer" },
+        "assists": { "type": "integer" },
+        "score": { "type": "integer" },
+        "headshotPercentage": { "type": "number" },
+        "matchDate": { "type": "string" }
+      },
+      "required": ["matchId", "map", "agent", "result"]
+    }
+  },
+  "firestore": {
+    "/players/{playerId}": {
+      "schema": "Player",
+      "description": "Registered and saved players keyed by sanitized tag (e.g., gameName_tagLine)"
+    },
+    "/players/{playerId}/matches/{matchId}": {
+      "schema": "Match",
+      "description": "Saved historical match logs cached for each player"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Vava Bronze",
+  "description": "Portal completo de estatísticas competitivas para o Valorant, integrado e atualizado via Riot API e Firebase Firestore.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

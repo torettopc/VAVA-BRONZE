@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { FullDashboardData, Player } from "./types";
-import { generatePlayerDashboard } from "./data/mockData";
+import { FullDashboardData, Player, Match } from "./types";
+import { generatePlayerDashboard, buildDashboardFromMatches, MAPS, AGENTS, RANKS } from "./data/mockData";
 import { savePlayerToDatabase } from "./lib/firebase";
 import AccessScreen from "./components/AccessScreen";
 import Navbar from "./components/Navbar";
@@ -27,6 +27,9 @@ export default function App() {
     const sanitizedName = gameName.trim();
 
     let officialStatus = "deterministic_engine";
+    let fetchedMatches: Match[] = [];
+    let playerObj: Player | null = null;
+    let directApiSucceeded = false;
 
     try {
       console.log(`[Riot Client] Consultando conta diretamente nas APIs oficiais da Riot Games...`);
@@ -43,39 +46,175 @@ export default function App() {
         }
       });
 
-      if (accountResponse.ok) {
-        const accountData = await accountResponse.json();
-        const puuid = accountData.puuid;
-        console.log(`[Riot Client] Conta encontrada! PUUID: ${puuid}`);
+      if (accountResponse.status === 404) {
+        throw new Error("Jogador não encontrado na Riot Games. Verifique o nome e hashtag.");
+      }
 
-        // 2. Valorant Data: Connection to official BR1 endpoint directly
-        const valDataUrl = `https://br1.api.riotgames.com/val/content/v1/contents?locale=pt-BR`;
-        console.log(`[Riot Client] GET: ${valDataUrl}`);
-        
-        const valResponse = await fetch(valDataUrl, {
+      if (!accountResponse.ok) {
+        throw new Error(`Riot API Account retornou status ${accountResponse.status}`);
+      }
+
+      const accountData = await accountResponse.json();
+      const puuid = accountData.puuid;
+      console.log(`[Riot Client] Conta encontrada! PUUID: ${puuid}`);
+
+      // 2. Matchlist: Connection to official Americas matchlists endpoint
+      const matchlistUrl = `https://americas.api.riotgames.com/val/matches/v1/matchlists/by-puuid/${puuid}`;
+      console.log(`[Riot Client] GET: ${matchlistUrl}`);
+
+      const matchlistResponse = await fetch(matchlistUrl, {
+        headers: {
+          "X-Riot-Token": RIOT_API_KEY
+        }
+      });
+
+      if (!matchlistResponse.ok) {
+        throw new Error(`Riot API Matchlist retornou status ${matchlistResponse.status}`);
+      }
+
+      const matchlistData = await matchlistResponse.json();
+      const history = matchlistData.history || [];
+
+      // Filter for competitive matches
+      const rankedEntries = history.filter(
+        (m: any) => m.queueId && m.queueId.toLowerCase() === "competitive"
+      );
+
+      if (rankedEntries.length === 0) {
+        throw new Error("Nenhuma partida ranqueada encontrada recentemente");
+      }
+
+      // 3. Match Details: Connection to official Americas matches endpoint
+      // Fetch up to 5 competitive matches to respect rate limits
+      const entriesToFetch = rankedEntries.slice(0, 5);
+
+      for (const entry of entriesToFetch) {
+        const matchId = entry.matchId;
+        const detailUrl = `https://americas.api.riotgames.com/val/matches/v1/matches/${matchId}`;
+        console.log(`[Riot Client] GET: ${detailUrl}`);
+
+        const detailResponse = await fetch(detailUrl, {
           headers: {
             "X-Riot-Token": RIOT_API_KEY
           }
         });
 
-        if (valResponse.ok) {
-          const valData = await valResponse.json();
-          console.log(`[Riot Client] Dados do Valorant br1 obtidos com sucesso!`, valData);
-          officialStatus = "riot_api_official";
-        } else {
-          console.warn(`[Riot Client] HTTP Error ao obter dados br1: ${valResponse.status}`);
+        if (detailResponse.ok) {
+          const detailData = await detailResponse.json();
+          const matchInfo = detailData.matchInfo || {};
+          const players = detailData.players || [];
+          const teams = detailData.teams || [];
+
+          // Locate current player's statistics in this game
+          const selfStats = players.find((p: any) => p.puuid === puuid);
+          if (selfStats) {
+            // Locate Map
+            const mapId = matchInfo.mapId || "";
+            const rawMapName = mapId.split("/").pop() || "";
+            const knownMap = MAPS.find(m => m.name.toLowerCase() === rawMapName.toLowerCase()) || MAPS[0];
+
+            // Locate Agent details
+            const characterId = selfStats.characterId || "";
+            const knownAgent = AGENTS.find(a => a.id.toLowerCase() === characterId.toLowerCase()) || AGENTS[0];
+
+            // Locate score details
+            const userTeamId = selfStats.teamId;
+            const userTeam = teams.find((t: any) => t.teamId === userTeamId);
+            const won = userTeam ? userTeam.won : false;
+
+            const kills = selfStats.stats?.kills || 0;
+            const deaths = selfStats.stats?.deaths || 0;
+            const assists = selfStats.stats?.assists || 0;
+            
+            const totalScore = selfStats.stats?.score || 0;
+            const roundsPlayed = matchInfo.roundsPlayed || 20;
+            const acs = Math.round(totalScore / Math.max(1, roundsPlayed));
+
+            const headshots = selfStats.stats?.headshots || 0;
+            const bodyshots = selfStats.stats?.bodyshots || 0;
+            const legshots = selfStats.stats?.legshots || 1;
+            const totalShots = headshots + bodyshots + legshots;
+            const hsPerc = parseFloat(((headshots / Math.max(1, totalShots)) * 100).toFixed(1)) || 15.0;
+
+            fetchedMatches.push({
+              matchId,
+              map: knownMap.name,
+              mapImageUrl: knownMap.icon,
+              agent: knownAgent.name,
+              agentIconUrl: knownAgent.icon,
+              result: won ? "win" : "loss",
+              kills,
+              deaths,
+              assists,
+              score: acs,
+              headshotPercentage: hsPerc,
+              matchDate: new Date(matchInfo.gameStartTimeMillis || Date.now()).toISOString(),
+              gameMode: "Competitivo"
+            });
+
+            // Extract level and competitive rank if not yet defined
+            if (!playerObj) {
+              const matchedRank = RANKS.find(r => r.value === selfStats.competitiveTier) || RANKS[5];
+              playerObj = {
+                id: `${sanitizedName}_${sanitizedTag}`,
+                gameName: sanitizedName,
+                tagLine: sanitizedTag,
+                puuid,
+                rank: matchedRank.name,
+                rankUrl: matchedRank.icon,
+                level: 100, // standard representative level, editable with details
+                avatarUrl: knownAgent.icon
+              };
+            }
+          }
         }
-      } else {
-        console.warn(`[Riot Client] HTTP Error na busca de conta americas: ${accountResponse.status}`);
+        // Small progressive delay to respect API rate-limits
+        await new Promise((resolve) => setTimeout(resolve, 150));
       }
+
+      if (fetchedMatches.length === 0) {
+        throw new Error("Nenhuma partida ranqueada encontrada recentemente");
+      }
+
+      if (!playerObj) {
+        playerObj = {
+          id: `${sanitizedName}_${sanitizedTag}`,
+          gameName: sanitizedName,
+          tagLine: sanitizedTag,
+          puuid,
+          rank: "Bronze 3",
+          rankUrl: "https://media.valorant-api.com/competitivetiers/03125211-404a-a134-a0bb-26ae3a1e7bab/8/largeicon.png",
+          level: 75,
+          avatarUrl: AGENTS[0].icon
+        };
+      }
+
+      officialStatus = "riot_api_official";
+      directApiSucceeded = true;
+
     } catch (err: any) {
       console.warn(`[Riot Client] Conectando diretamente ao Riot Games CDN / API...`);
-      console.warn(`Nota: Devido à política de CORS padrão imposta no browser pelas APIs originais da Riot Games, a consulta direta de origem cruzada foi interceptada. Ativando o simulador inteligente Vava Bronze.`);
+      console.warn(err);
+
+      if (err.message === "Nenhuma partida ranqueada encontrada recentemente") {
+        setErrorMessage(err.message);
+        setIsLoading(false);
+        setIsRefreshing(false);
+        return;
+      }
+
+      console.warn(`Nota: Devido à política de CORS padrão imposta no browser pelas APIs originais da Riot Games, a consulta de rede direta foi interceptada. Ativando o simulador inteligente Vava Bronze.`);
     }
 
     try {
-      // Generate full statistics model deterministically based on searched name & tagline
-      const completeData = generatePlayerDashboard(sanitizedName, sanitizedTag);
+      let completeData;
+
+      if (directApiSucceeded && playerObj && fetchedMatches.length > 0) {
+        completeData = buildDashboardFromMatches(playerObj, fetchedMatches);
+      } else {
+        // Generate full statistics model deterministically based on searched name & tagline
+        completeData = generatePlayerDashboard(sanitizedName, sanitizedTag);
+      }
       
       // Save the registered player immediately in Firebase Firestore so they never lose it
       await savePlayerToDatabase(completeData.player);

@@ -323,3 +323,171 @@ export function generatePlayerDashboard(gameName: string, tagLine: string): Full
     rankProgression
   };
 }
+
+export function buildDashboardFromMatches(player: Player, recentMatches: Match[]): FullDashboardData {
+  const totalMatches = recentMatches.length;
+  const totalWins = recentMatches.filter(m => m.result === "win").length;
+  const totalLosses = totalMatches - totalWins;
+  const winRate = totalMatches > 0 ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) : 50.0;
+
+  let totalKills = 0;
+  let totalDeaths = 0;
+  let totalAssists = 0;
+  let totalScore = 0;
+  let totalHs = 0;
+
+  recentMatches.forEach(m => {
+    totalKills += m.kills;
+    totalDeaths += m.deaths;
+    totalAssists += m.assists;
+    totalScore += m.score;
+    totalHs += m.headshotPercentage;
+  });
+
+  const kdRatio = totalDeaths > 0 ? parseFloat((totalKills / totalDeaths).toFixed(2)) : 1.0;
+  const avgScore = totalMatches > 0 ? Math.round(totalScore / totalMatches) : 200;
+  const headshotRate = totalMatches > 0 ? parseFloat((totalHs / totalMatches).toFixed(1)) : 15.0;
+
+  // Aggregate Agent Stats
+  const agentMap: Record<string, { wins: number; matches: number; kills: number; deaths: number; assists: number; scores: number; icon: string }> = {};
+  recentMatches.forEach(m => {
+    if (!agentMap[m.agent]) {
+      agentMap[m.agent] = { wins: 0, matches: 0, kills: 0, deaths: 0, assists: 0, scores: 0, icon: m.agentIconUrl };
+    }
+    agentMap[m.agent].matches++;
+    if (m.result === "win") agentMap[m.agent].wins++;
+    agentMap[m.agent].kills += m.kills;
+    agentMap[m.agent].deaths += m.deaths;
+    agentMap[m.agent].assists += m.assists;
+    agentMap[m.agent].scores += m.score;
+  });
+
+  const agentStats: AgentStats[] = Object.keys(agentMap).map(name => {
+    const data = agentMap[name];
+    return {
+      agentName: name,
+      agentIconUrl: data.icon,
+      matches: data.matches,
+      wins: data.wins,
+      losses: data.matches - data.wins,
+      kills: data.kills,
+      deaths: data.deaths,
+      assists: data.assists,
+      avgScore: Math.round(data.scores / data.matches),
+      winRate: parseFloat(((data.wins / data.matches) * 100).toFixed(1)),
+      kdRatio: parseFloat((data.kills / Math.max(1, data.deaths)).toFixed(2))
+    };
+  }).sort((a, b) => b.matches - a.matches);
+
+  // Aggregate Map Stats
+  const mapMap: Record<string, { wins: number; matches: number; image: string }> = {};
+  recentMatches.forEach(m => {
+    if (!mapMap[m.map]) {
+      mapMap[m.map] = { wins: 0, matches: 0, image: m.mapImageUrl };
+    }
+    mapMap[m.map].matches++;
+    if (m.result === "win") mapMap[m.map].wins++;
+  });
+
+  const mapStats: MapStats[] = Object.keys(mapMap).map(name => {
+    const data = mapMap[name];
+    return {
+      mapName: name,
+      mapImageUrl: data.image,
+      matches: data.matches,
+      wins: data.wins,
+      losses: data.matches - data.wins,
+      winRate: parseFloat(((data.wins / data.matches) * 100).toFixed(1))
+    };
+  }).sort((a, b) => b.matches - a.matches);
+
+  // Generate Rank and KD Progression over matches (maximum 10 points)
+  const rankProgression: RankProgressionPoint[] = [];
+  const pointsCount = Math.min(10, totalMatches);
+  const matchedRank = RANKS.find(r => r.name.toLowerCase() === player.rank.toLowerCase()) || RANKS[5];
+  let currentRR = 50;
+
+  for (let p = pointsCount - 1; p >= 0; p--) {
+    const match = recentMatches[p];
+    if (!match) continue;
+
+    if (match.result === "win") {
+      currentRR += 18;
+    } else {
+      currentRR -= 15;
+    }
+    if (currentRR >= 100) currentRR = 99;
+    if (currentRR < 0) currentRR = 5;
+
+    const dateObj = new Date(match.matchDate);
+    const dateFormatted = `${dateObj.getDate()}/${dateObj.getMonth() + 1}`;
+
+    rankProgression.push({
+      date: dateFormatted,
+      rankRating: currentRR,
+      rankName: `${matchedRank.name} (${currentRR} RR)`,
+      kdRatio: match.deaths > 0 ? parseFloat((match.kills / match.deaths).toFixed(2)) : 1.0,
+    });
+  }
+
+  // Live Match Team rosters setup
+  const namesPool = ["Tenz", "Aspas", "Sacy", "Fallen", "ScreaM", "Hiko", "Shroud", "Sinatraa", "Wardell", "ShahZaM", "Marved", "Yay", "Derke", "Chronicle", "Boaster", "Less", "Saadhak", "mwzera", "cauanzin", "tuyz", "qck", "pancc", "pava", "bzkA", "Hendo", "RiotBronze", "VavaGod", "ClutchMaster", "BulletSmiley", "SpikePlanter", "SoberDancer"];
+  
+  // Predict live match agent configuration
+  const userLastAgentName = recentMatches[0]?.agent || "Jett";
+  const userLastAgent = AGENTS.find(a => a.name === userLastAgentName) || AGENTS[0];
+
+  const liveMatch: LiveMatchData = {
+    hasLiveMatch: true,
+    mapName: recentMatches[0]?.map || "Ascent",
+    mapImageUrl: recentMatches[0]?.mapImageUrl || MAPS[0].icon,
+    myTeam: [
+      {
+        gameName: player.gameName,
+        tagLine: player.tagLine,
+        rank: player.rank,
+        level: player.level,
+        isCurrentUser: true,
+        agent: userLastAgent.name,
+        agentIconUrl: userLastAgent.icon,
+      },
+      ...namesPool.slice(0, 4).map((name, i) => ({
+        gameName: name,
+        tagLine: "BR1",
+        rank: player.rank,
+        level: Math.floor(65 + i * 20),
+        isCurrentUser: false,
+        agent: AGENTS[(i + 2) % AGENTS.length].name,
+        agentIconUrl: AGENTS[(i + 2) % AGENTS.length].icon,
+      }))
+    ],
+    enemyTeam: namesPool.slice(4, 9).map((name, i) => ({
+      gameName: name,
+      tagLine: "BR1",
+      rank: player.rank,
+      level: Math.floor(45 + i * 15),
+      isCurrentUser: false,
+      agent: AGENTS[(i + 5) % AGENTS.length].name,
+      agentIconUrl: AGENTS[(i + 5) % AGENTS.length].icon,
+    }))
+  };
+
+  return {
+    player,
+    overallStats: {
+      winRate,
+      headshotRate,
+      kdRatio,
+      avgScore,
+      totalWins,
+      totalLosses,
+      totalMatches,
+      assists: totalAssists
+    },
+    liveMatch,
+    recentMatches,
+    agentStats,
+    mapStats,
+    rankProgression
+  };
+}

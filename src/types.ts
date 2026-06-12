@@ -79,6 +79,14 @@ export interface RankProgressionPoint {
   kdRatio: number;
 }
 
+export interface LeaderboardPlayer {
+  leaderboardRank: number;
+  rankedRating: number;
+  numberOfWins: number;
+  gameName: string;
+  tagLine: string;
+}
+
 export interface FullDashboardData {
   player: Player;
   overallStats: {
@@ -96,4 +104,5 @@ export interface FullDashboardData {
   agentStats: AgentStats[];
   mapStats: MapStats[];
   rankProgression: RankProgressionPoint[];
+  leaderboard?: LeaderboardPlayer[];
 }

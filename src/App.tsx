@@ -36,6 +36,10 @@ export default function App() {
       
       const RIOT_API_KEY = ((import.meta as any).env?.VITE_RIOT_API_KEY as string) || "RGAPI-cd8cef51-553c-4cae-a51c-07411acd6c73";
       
+      if (!RIOT_API_KEY || RIOT_API_KEY.includes("YOUR_")) {
+        throw new Error("Chave de API do Riot Games não configurada ou inválida nas variáveis de ambiente (VITE_RIOT_API_KEY).");
+      }
+
       // 1. Account Search: Connection to official Americas endpoint directly
       const accountUrl = `https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(sanitizedName)}/${encodeURIComponent(sanitizedTag)}`;
       console.log(`[Riot Client] GET: ${accountUrl}`);
@@ -45,6 +49,10 @@ export default function App() {
           "X-Riot-Token": RIOT_API_KEY
         }
       });
+
+      if (accountResponse.status === 401 || accountResponse.status === 403) {
+        throw new Error("Chave de acesso (API Key) da Riot Games inválida ou expirada.");
+      }
 
       if (accountResponse.status === 404) {
         throw new Error("Jogador não encontrado na Riot Games. Verifique o nome e hashtag.");
@@ -56,10 +64,15 @@ export default function App() {
 
       const accountData = await accountResponse.json();
       const puuid = accountData.puuid;
+      const gameNameReceived = accountData.gameName || sanitizedName;
+      const tagLineReceived = accountData.tagLine || sanitizedTag;
       console.log(`[Riot Client] Conta encontrada! PUUID: ${puuid}`);
 
-      // 2. Matchlist: Connection to official Americas matchlists endpoint
-      const matchlistUrl = `https://americas.api.riotgames.com/val/matches/v1/matchlists/by-puuid/${puuid}`;
+      // Small progressive delay to respect API rate-limits
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // 2. Matchlist: Connection to official br1 endpoint for competitive match lists
+      const matchlistUrl = `https://br1.api.riotgames.com/val/matches/v1/matchlists/by-puuid/${puuid}?type=competitive&start=0&count=20`;
       console.log(`[Riot Client] GET: ${matchlistUrl}`);
 
       const matchlistResponse = await fetch(matchlistUrl, {
@@ -68,6 +81,14 @@ export default function App() {
         }
       });
 
+      if (matchlistResponse.status === 401 || matchlistResponse.status === 403) {
+        throw new Error("Chave de acesso (API Key) da Riot Games inválida ou expirada.");
+      }
+
+      if (matchlistResponse.status === 404) {
+        throw new Error("Nenhuma partida ranqueada encontrada nos últimos dias");
+      }
+
       if (!matchlistResponse.ok) {
         throw new Error(`Riot API Matchlist retornou status ${matchlistResponse.status}`);
       }
@@ -75,22 +96,20 @@ export default function App() {
       const matchlistData = await matchlistResponse.json();
       const history = matchlistData.history || [];
 
-      // Filter for competitive matches
-      const rankedEntries = history.filter(
-        (m: any) => m.queueId && m.queueId.toLowerCase() === "competitive"
-      );
-
-      if (rankedEntries.length === 0) {
-        throw new Error("Nenhuma partida ranqueada encontrada recentemente");
+      if (history.length === 0) {
+        throw new Error("Nenhuma partida ranqueada encontrada nos últimos dias");
       }
 
-      // 3. Match Details: Connection to official Americas matches endpoint
+      // 3. Match Details: Connection to official br1 matches endpoint
       // Fetch up to 5 competitive matches to respect rate limits
-      const entriesToFetch = rankedEntries.slice(0, 5);
+      const entriesToFetch = history.slice(0, 5);
+
+      // Progressive delay before crawling match details
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       for (const entry of entriesToFetch) {
         const matchId = entry.matchId;
-        const detailUrl = `https://americas.api.riotgames.com/val/matches/v1/matches/${matchId}`;
+        const detailUrl = `https://br1.api.riotgames.com/val/matches/v1/matches/${matchId}`;
         console.log(`[Riot Client] GET: ${detailUrl}`);
 
         const detailResponse = await fetch(detailUrl, {
@@ -156,31 +175,31 @@ export default function App() {
             if (!playerObj) {
               const matchedRank = RANKS.find(r => r.value === selfStats.competitiveTier) || RANKS[5];
               playerObj = {
-                id: `${sanitizedName}_${sanitizedTag}`,
-                gameName: sanitizedName,
-                tagLine: sanitizedTag,
+                id: `${gameNameReceived}_${tagLineReceived}`,
+                gameName: gameNameReceived,
+                tagLine: tagLineReceived,
                 puuid,
                 rank: matchedRank.name,
                 rankUrl: matchedRank.icon,
-                level: 100, // standard representative level, editable with details
+                level: selfStats.accountLevel || 100,
                 avatarUrl: knownAgent.icon
               };
             }
           }
         }
-        // Small progressive delay to respect API rate-limits
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        // Micro throttle delay to protect developer keys
+        await new Promise((resolve) => setTimeout(resolve, 300));
       }
 
       if (fetchedMatches.length === 0) {
-        throw new Error("Nenhuma partida ranqueada encontrada recentemente");
+        throw new Error("Nenhuma partida ranqueada encontrada nos últimos dias");
       }
 
       if (!playerObj) {
         playerObj = {
-          id: `${sanitizedName}_${sanitizedTag}`,
-          gameName: sanitizedName,
-          tagLine: sanitizedTag,
+          id: `${gameNameReceived}_${tagLineReceived}`,
+          gameName: gameNameReceived,
+          tagLine: tagLineReceived,
           puuid,
           rank: "Bronze 3",
           rankUrl: "https://media.valorant-api.com/competitivetiers/03125211-404a-a134-a0bb-26ae3a1e7bab/8/largeicon.png",
@@ -189,14 +208,67 @@ export default function App() {
         };
       }
 
+      // 4. Try fetching live leaderboard by active Act ID
+      let leaderboardData: any[] = [];
+      try {
+        console.log(`[Riot Client] Buscando ID de Act Ativa...`);
+        const contentUrl = `https://br1.api.riotgames.com/val/content/v1/contents?locale=pt-BR`;
+        const contentResponse = await fetch(contentUrl, {
+          headers: {
+            "X-Riot-Token": RIOT_API_KEY
+          }
+        });
+
+        if (contentResponse.ok) {
+          const contents = await contentResponse.json();
+          const activeActObj = contents.acts?.find((act: any) => act.isActive && act.type === "act");
+          const actId = activeActObj?.id || "9231aa7e-40af-46b5-31df-7b90db75f4eb";
+
+          console.log(`[Riot Client] GET: https://br1.api.riotgames.com/val/ranked/v1/leaderboards/by-act/${actId}`);
+          const leaderboardUrl = `https://br1.api.riotgames.com/val/ranked/v1/leaderboards/by-act/${actId}?size=10&startIndex=0`;
+          const leaderboardResponse = await fetch(leaderboardUrl, {
+            headers: {
+              "X-Riot-Token": RIOT_API_KEY
+            }
+          });
+
+          if (leaderboardResponse.ok) {
+            const rawLeaderboard = await leaderboardResponse.json();
+            if (rawLeaderboard.players) {
+              leaderboardData = rawLeaderboard.players
+                .filter((p: any) => p.gameName)
+                .slice(0, 10)
+                .map((p: any, index: number) => ({
+                  leaderboardRank: p.leaderboardRank || index + 1,
+                  rankedRating: p.rankedRating || 800,
+                  numberOfWins: p.numberOfWins || 50,
+                  gameName: p.gameName,
+                  tagLine: p.tagLine || "BR1"
+                }));
+            }
+          }
+        }
+      } catch (boardErr) {
+        console.warn(`[Riot Client] Erro não obstrutivo ao obter leaderboard:`, boardErr);
+      }
+
       officialStatus = "riot_api_official";
       directApiSucceeded = true;
+      (playerObj as any).leaderboard = leaderboardData.length > 0 ? leaderboardData : undefined;
 
     } catch (err: any) {
       console.warn(`[Riot Client] Conectando diretamente ao Riot Games CDN / API...`);
       console.warn(err);
 
-      if (err.message === "Nenhuma partida ranqueada encontrada recentemente") {
+      // Check if this is an explicit custom error thrown due to bad keys, player not found, or empty matches
+      const isCustomError = 
+        err.message?.includes("Jogador não encontrado") || 
+        err.message?.includes("Chave de acesso") || 
+        err.message?.includes("Nenhuma partida ranqueada") || 
+        err.message?.includes("desenvolvedor") || 
+        err.message?.includes("VITE_RIOT_API_KEY");
+
+      if (isCustomError) {
         setErrorMessage(err.message);
         setIsLoading(false);
         setIsRefreshing(false);
@@ -210,7 +282,8 @@ export default function App() {
       let completeData;
 
       if (directApiSucceeded && playerObj && fetchedMatches.length > 0) {
-        completeData = buildDashboardFromMatches(playerObj, fetchedMatches);
+        const leaderboardDataArr = (playerObj as any).leaderboard;
+        completeData = buildDashboardFromMatches(playerObj, fetchedMatches, leaderboardDataArr);
       } else {
         // Generate full statistics model deterministically based on searched name & tagline
         completeData = generatePlayerDashboard(sanitizedName, sanitizedTag);

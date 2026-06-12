@@ -200,6 +200,55 @@ export default function StatsTab({ data }: StatsTabProps) {
         </div>
       </div>
 
+      {/* Row 4: Ranking de Elite de Radiantes */}
+      <div className="bg-[#151525] border border-white/5 rounded-3xl p-6 shadow-xl">
+        <div className="flex items-center gap-2 mb-4">
+          <Award className="w-5 h-5 text-amber-500" />
+          <h3 className="text-sm font-bold uppercase tracking-widest font-display text-white">
+            Classificação Oficial: Top 10 Radiantes do Servidor (BR)
+          </h3>
+        </div>
+
+        <p className="text-[11px] font-mono text-[#A855F7] mb-4 -mt-1.5 leading-relaxed uppercase tracking-wider font-bold">
+          Estatísticas exclusivas sincronizadas diretamente das APIs Oficiais da Riot Games v4 para o Act correspondente.
+        </p>
+
+        <div className="overflow-x-auto" id="leaderboard_grid_table">
+          <table className="w-full text-left border-collapse font-mono text-xs">
+            <thead>
+              <tr className="border-b border-white/10 text-white/40 uppercase text-[10px] tracking-widest font-bold">
+                <th className="py-3 px-4">Posição</th>
+                <th className="py-3 px-4">Jogador</th>
+                <th className="py-3 px-4 text-center">Partidas Ganhas</th>
+                <th className="py-3 px-4 text-right font-bold">Pontuação RR (Radiante)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5 text-white/80">
+              {data.leaderboard?.map((p) => (
+                <tr key={`${p.gameName}_${p.leaderboardRank}`} className="hover:bg-white/5 transition-colors">
+                  <td className="py-3.5 px-4 font-bold text-white uppercase tracking-wide">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                      p.leaderboardRank === 1 ? "bg-yellow-500/10 text-yellow-500 border border-yellow-500/20" :
+                      p.leaderboardRank === 2 ? "bg-slate-400/10 text-slate-300 border border-slate-400/20" :
+                      p.leaderboardRank === 3 ? "bg-amber-600/10 text-amber-500 border border-amber-600/20" :
+                      "bg-white/5 text-white/60"
+                    }`}>
+                      #{p.leaderboardRank}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-4 font-bold">
+                    <span className="text-white">{p.gameName}</span>
+                    <span className="text-white/30 text-[10px]">#{p.tagLine}</span>
+                  </td>
+                  <td className="py-3.5 px-4 text-center text-white/70 font-semibold">{p.numberOfWins} Vitórias</td>
+                  <td className="py-3.5 px-4 text-right font-black text-[#00E5FF]">{p.rankedRating} RR</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
   );
 }

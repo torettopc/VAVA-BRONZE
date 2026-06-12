@@ -1,4 +1,4 @@
-import { FullDashboardData, Player, Match, AgentStats, MapStats, RankProgressionPoint, TeamMember, LiveMatchData } from "../types";
+import { FullDashboardData, Player, Match, AgentStats, MapStats, RankProgressionPoint, TeamMember, LiveMatchData, LeaderboardPlayer } from "../types";
 
 // High-fidelity asset links from valorant-api.com
 export const AGENTS = [
@@ -320,11 +320,27 @@ export function generatePlayerDashboard(gameName: string, tagLine: string): Full
     recentMatches,
     agentStats,
     mapStats,
-    rankProgression
+    rankProgression,
+    leaderboard: generateMockLeaderboard()
   };
 }
 
-export function buildDashboardFromMatches(player: Player, recentMatches: Match[]): FullDashboardData {
+export function generateMockLeaderboard(): LeaderboardPlayer[] {
+  return [
+    { leaderboardRank: 1, rankedRating: 1245, numberOfWins: 182, gameName: "Mwzera", tagLine: "LOUD" },
+    { leaderboardRank: 2, rankedRating: 1195, numberOfWins: 167, gameName: "Aspas", tagLine: "LEV" },
+    { leaderboardRank: 3, rankedRating: 1140, numberOfWins: 154, gameName: "Less", tagLine: "LOUD" },
+    { leaderboardRank: 4, rankedRating: 1095, numberOfWins: 141, gameName: "dgzin", tagLine: "MIBR" },
+    { leaderboardRank: 5, rankedRating: 1060, numberOfWins: 135, gameName: "Sacy", tagLine: "SEN" },
+    { leaderboardRank: 6, rankedRating: 1025, numberOfWins: 128, gameName: "cauanzin", tagLine: "LOUD" },
+    { leaderboardRank: 7, rankedRating: 995, numberOfWins: 121, gameName: "tuyz", tagLine: "LOUD" },
+    { leaderboardRank: 8, rankedRating: 970, numberOfWins: 118, gameName: "qck", tagLine: "FUR" },
+    { leaderboardRank: 9, rankedRating: 945, numberOfWins: 112, gameName: "Khalil", tagLine: "FUR" },
+    { leaderboardRank: 10, rankedRating: 910, numberOfWins: 109, gameName: "mazin", tagLine: "MIBR" }
+  ];
+}
+
+export function buildDashboardFromMatches(player: Player, recentMatches: Match[], leaderboard?: LeaderboardPlayer[]): FullDashboardData {
   const totalMatches = recentMatches.length;
   const totalWins = recentMatches.filter(m => m.result === "win").length;
   const totalLosses = totalMatches - totalWins;
@@ -488,6 +504,7 @@ export function buildDashboardFromMatches(player: Player, recentMatches: Match[]
     recentMatches,
     agentStats,
     mapStats,
-    rankProgression
+    rankProgression,
+    leaderboard: leaderboard || generateMockLeaderboard()
   };
 }

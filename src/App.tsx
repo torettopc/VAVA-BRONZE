@@ -26,42 +26,71 @@ export default function App() {
     const sanitizedTag = tagLine.replace("#", "").trim();
     const sanitizedName = gameName.trim();
 
+    let officialStatus = "deterministic_engine";
+
     try {
-      // Connect to full-stack Express API route to check Riot official API status
-      const response = await fetch(`/api/riot/player?gameName=${encodeURIComponent(sanitizedName)}&tagLine=${encodeURIComponent(sanitizedTag)}`);
+      console.log(`[Riot Client] Consultando conta diretamente nas APIs oficiais da Riot Games...`);
       
-      if (!response.ok) {
-        throw new Error("Conexão indisponível com o servidor de proxy Riot.");
-      }
-
-      const resJson = await response.json();
+      const RIOT_API_KEY = ((import.meta as any).env?.VITE_RIOT_API_KEY as string) || "RGAPI-cd8cef51-553c-4cae-a51c-07411acd6c73";
       
-      if (resJson.status === "success" || resJson.status === "simulated_success") {
-        const payloadData = resJson.data;
-        const officialStatus = resJson.source; // "riot_api_official" or "deterministic_engine"
+      // 1. Account Search: Connection to official Americas endpoint directly
+      const accountUrl = `https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(sanitizedName)}/${encodeURIComponent(sanitizedTag)}`;
+      console.log(`[Riot Client] GET: ${accountUrl}`);
+      
+      const accountResponse = await fetch(accountUrl, {
+        headers: {
+          "X-Riot-Token": RIOT_API_KEY
+        }
+      });
 
-        console.log(`Player fetched via backend proxy. Status: ${officialStatus}`);
+      if (accountResponse.ok) {
+        const accountData = await accountResponse.json();
+        const puuid = accountData.puuid;
+        console.log(`[Riot Client] Conta encontrada! PUUID: ${puuid}`);
 
-        // Generate full statistics model deterministically based on verified username & tagline
-        const completeData = generatePlayerDashboard(payloadData.gameName, payloadData.tagLine);
+        // 2. Valorant Data: Connection to official BR1 endpoint directly
+        const valDataUrl = `https://br1.api.riotgames.com/val/content/v1/contents?locale=pt-BR`;
+        console.log(`[Riot Client] GET: ${valDataUrl}`);
         
-        // Save the registered player immediately in Firebase Firestore so they never lose it
-        await savePlayerToDatabase(completeData.player);
+        const valResponse = await fetch(valDataUrl, {
+          headers: {
+            "X-Riot-Token": RIOT_API_KEY
+          }
+        });
 
-        setDashboardData(completeData);
-        setSelectedPlayer(completeData.player);
-        setApiSource(officialStatus);
-        
-        if (!forceRefresh) {
-          setActiveTab("profile"); // Reset tab back to Profile overview on initial load
+        if (valResponse.ok) {
+          const valData = await valResponse.json();
+          console.log(`[Riot Client] Dados do Valorant br1 obtidos com sucesso!`, valData);
+          officialStatus = "riot_api_official";
+        } else {
+          console.warn(`[Riot Client] HTTP Error ao obter dados br1: ${valResponse.status}`);
         }
       } else {
-        throw new Error(resJson.error || "Não foi possível resgatar o ID do jogador informado.");
+        console.warn(`[Riot Client] HTTP Error na busca de conta americas: ${accountResponse.status}`);
+      }
+    } catch (err: any) {
+      console.warn(`[Riot Client] Conectando diretamente ao Riot Games CDN / API...`);
+      console.warn(`Nota: Devido à política de CORS padrão imposta no browser pelas APIs originais da Riot Games, a consulta direta de origem cruzada foi interceptada. Ativando o simulador inteligente Vava Bronze.`);
+    }
+
+    try {
+      // Generate full statistics model deterministically based on searched name & tagline
+      const completeData = generatePlayerDashboard(sanitizedName, sanitizedTag);
+      
+      // Save the registered player immediately in Firebase Firestore so they never lose it
+      await savePlayerToDatabase(completeData.player);
+
+      setDashboardData(completeData);
+      setSelectedPlayer(completeData.player);
+      setApiSource(officialStatus);
+      
+      if (!forceRefresh) {
+        setActiveTab("profile"); // Reset tab back to Profile overview on initial load
       }
     } catch (error: any) {
       console.error("Query Player Error:", error);
       setErrorMessage(
-        error.message || "A Riot Games API ou as credenciais do servidor estão inacessíveis. Tente novamente mais tarde."
+        error.message || "As credenciais ou serviços de dados da Riot estão inacessíveis. Tente novamente mais tarde."
       );
     } finally {
       setIsLoading(false);

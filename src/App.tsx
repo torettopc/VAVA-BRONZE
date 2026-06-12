@@ -32,30 +32,52 @@ export default function App() {
     let directApiSucceeded = false;
 
     try {
-      console.log(`[Riot Client] Consultando conta diretamente nas APIs oficiais da Riot Games...`);
+      console.log(`[Riot Client] Consultando conta diretamente nas APIs oficiais (com fallback seguro híbrido)...`);
       
       const RIOT_API_KEY = ((import.meta as any).env?.VITE_RIOT_API_KEY as string) || "RGAPI-cd8cef51-553c-4cae-a51c-07411acd6c73";
       
-      if (!RIOT_API_KEY || RIOT_API_KEY.includes("YOUR_")) {
-        throw new Error("Chave de API do Riot Games não configurada ou inválida nas variáveis de ambiente (VITE_RIOT_API_KEY).");
+      let accountResponse;
+      let isUsingProxy = true;
+
+      // 1. Account Search: Try using local secure backend proxy first to avoid browser CORS errors & secure key leaks
+      const proxyAccountUrl = `/api/riot/account/by-riot-id/${encodeURIComponent(sanitizedName)}/${encodeURIComponent(sanitizedTag)}`;
+      console.log(`[Riot Client] Buscando conta via Proxy Backend: ${proxyAccountUrl}`);
+      
+      try {
+        accountResponse = await fetch(proxyAccountUrl);
+        const contentType = accountResponse.headers.get("content-type") || "";
+        // If 404 static HTML fallback (Vercel SPA static server), switch off proxy support
+        if (accountResponse.status === 404 || contentType.includes("text/html")) {
+          console.warn("[Riot Client] Servidor proxy backend não detectado ou inativo (Vercel SPA estático). Redirecionando para chamada direta client-side...");
+          isUsingProxy = false;
+        }
+      } catch (proxyErr) {
+        console.warn("[Riot Client] Erro ao conectar ao proxy backend. Ativando fallback de consulta direta...", proxyErr);
+        isUsingProxy = false;
       }
 
-      // 1. Account Search: Connection to official Americas endpoint directly
-      const accountUrl = `https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(sanitizedName)}/${encodeURIComponent(sanitizedTag)}`;
-      console.log(`[Riot Client] GET: ${accountUrl}`);
-      
-      const accountResponse = await fetch(accountUrl, {
-        headers: {
-          "X-Riot-Token": RIOT_API_KEY
+      // If proxy is not active/available, call Riot API directly
+      if (!isUsingProxy) {
+        if (!RIOT_API_KEY || RIOT_API_KEY.includes("YOUR_") || RIOT_API_KEY === "RGAPI-cd8cef51-553c-4cae-a51c-07411acd6c73") {
+          throw new Error("Chave de acesso (API Key) da Riot Games não configurada ou inválida nas variáveis de ambiente do seu deploy (VITE_RIOT_API_KEY).");
         }
-      });
+
+        const accountUrl = `https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(sanitizedName)}/${encodeURIComponent(sanitizedTag)}`;
+        console.log(`[Riot Client] (Direct Fallback) GET: ${accountUrl}`);
+        
+        accountResponse = await fetch(accountUrl, {
+          headers: {
+            "X-Riot-Token": RIOT_API_KEY
+          }
+        });
+      }
 
       if (accountResponse.status === 401 || accountResponse.status === 403) {
-        throw new Error("Chave de acesso (API Key) da Riot Games inválida ou expirada.");
+        throw new Error("Chave de acesso (API Key) da Riot Games inválida ou expirada. Certifique-se de configurar a variável VITE_RIOT_API_KEY / RIOT_API_KEY corretamente.");
       }
 
       if (accountResponse.status === 404) {
-        throw new Error("Jogador não encontrado na Riot Games. Verifique o nome e hashtag.");
+        throw new Error("Jogador não encontrado na Riot Games. Verifique o nome e hashtag e tente novamente.");
       }
 
       if (!accountResponse.ok) {
@@ -69,17 +91,23 @@ export default function App() {
       console.log(`[Riot Client] Conta encontrada! PUUID: ${puuid}`);
 
       // Small progressive delay to respect API rate-limits
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 250));
 
       // 2. Matchlist: Connection to official br1 endpoint for competitive match lists
-      const matchlistUrl = `https://br1.api.riotgames.com/val/matches/v1/matchlists/by-puuid/${puuid}?type=competitive&start=0&count=20`;
-      console.log(`[Riot Client] GET: ${matchlistUrl}`);
-
-      const matchlistResponse = await fetch(matchlistUrl, {
-        headers: {
-          "X-Riot-Token": RIOT_API_KEY
-        }
-      });
+      let matchlistResponse;
+      if (isUsingProxy) {
+        const proxyMatchlistUrl = `/api/riot/val/matches/by-puuid/${puuid}`;
+        console.log(`[Riot Client] Obtendo partidas via Proxy: ${proxyMatchlistUrl}`);
+        matchlistResponse = await fetch(proxyMatchlistUrl);
+      } else {
+        const matchlistUrl = `https://br1.api.riotgames.com/val/matches/v1/matchlists/by-puuid/${puuid}?type=competitive&start=0&count=20`;
+        console.log(`[Riot Client] (Direct Fallback) GET: ${matchlistUrl}`);
+        matchlistResponse = await fetch(matchlistUrl, {
+          headers: {
+            "X-Riot-Token": RIOT_API_KEY
+          }
+        });
+      }
 
       if (matchlistResponse.status === 401 || matchlistResponse.status === 403) {
         throw new Error("Chave de acesso (API Key) da Riot Games inválida ou expirada.");
@@ -101,22 +129,29 @@ export default function App() {
       }
 
       // 3. Match Details: Connection to official br1 matches endpoint
-      // Fetch up to 5 competitive matches to respect rate limits
+      // Fetch up to 5 competitive matches to respect rate limits safely
       const entriesToFetch = history.slice(0, 5);
 
-      // Progressive delay before crawling match details
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // Progressive delay before crawling match details to avoid 429
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       for (const entry of entriesToFetch) {
         const matchId = entry.matchId;
-        const detailUrl = `https://br1.api.riotgames.com/val/matches/v1/matches/${matchId}`;
-        console.log(`[Riot Client] GET: ${detailUrl}`);
+        let detailResponse;
 
-        const detailResponse = await fetch(detailUrl, {
-          headers: {
-            "X-Riot-Token": RIOT_API_KEY
-          }
-        });
+        if (isUsingProxy) {
+          const proxyDetailUrl = `/api/riot/val/matches/${matchId}`;
+          console.log(`[Riot Client] Detalhes do Match via Proxy: ${proxyDetailUrl}`);
+          detailResponse = await fetch(proxyDetailUrl);
+        } else {
+          const detailUrl = `https://br1.api.riotgames.com/val/matches/v1/matches/${matchId}`;
+          console.log(`[Riot Client] (Direct Fallback) GET: ${detailUrl}`);
+          detailResponse = await fetch(detailUrl, {
+            headers: {
+              "X-Riot-Token": RIOT_API_KEY
+            }
+          });
+        }
 
         if (detailResponse.ok) {
           const detailData = await detailResponse.json();
@@ -187,8 +222,8 @@ export default function App() {
             }
           }
         }
-        // Micro throttle delay to protect developer keys
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        // Micro throttle delay to protect developer keys from rate limit
+        await new Promise((resolve) => setTimeout(resolve, 400));
       }
 
       if (fetchedMatches.length === 0) {
@@ -212,25 +247,37 @@ export default function App() {
       let leaderboardData: any[] = [];
       try {
         console.log(`[Riot Client] Buscando ID de Act Ativa...`);
-        const contentUrl = `https://br1.api.riotgames.com/val/content/v1/contents?locale=pt-BR`;
-        const contentResponse = await fetch(contentUrl, {
-          headers: {
-            "X-Riot-Token": RIOT_API_KEY
-          }
-        });
+        let contentResponse;
+        
+        if (isUsingProxy) {
+          contentResponse = await fetch(`/api/riot/val/content`);
+        } else {
+          const contentUrl = `https://br1.api.riotgames.com/val/content/v1/contents?locale=pt-BR`;
+          contentResponse = await fetch(contentUrl, {
+            headers: {
+              "X-Riot-Token": RIOT_API_KEY
+            }
+          });
+        }
 
         if (contentResponse.ok) {
           const contents = await contentResponse.json();
           const activeActObj = contents.acts?.find((act: any) => act.isActive && act.type === "act");
           const actId = activeActObj?.id || "9231aa7e-40af-46b5-31df-7b90db75f4eb";
 
-          console.log(`[Riot Client] GET: https://br1.api.riotgames.com/val/ranked/v1/leaderboards/by-act/${actId}`);
-          const leaderboardUrl = `https://br1.api.riotgames.com/val/ranked/v1/leaderboards/by-act/${actId}?size=10&startIndex=0`;
-          const leaderboardResponse = await fetch(leaderboardUrl, {
-            headers: {
-              "X-Riot-Token": RIOT_API_KEY
-            }
-          });
+          console.log(`[Riot Client] Solicitando Leaderboard para: ${actId}`);
+          let leaderboardResponse;
+          
+          if (isUsingProxy) {
+            leaderboardResponse = await fetch(`/api/riot/val/ranked/leaderboards/by-act/${actId}`);
+          } else {
+            const leaderboardUrl = `https://br1.api.riotgames.com/val/ranked/v1/leaderboards/by-act/${actId}?size=10&startIndex=0`;
+            leaderboardResponse = await fetch(leaderboardUrl, {
+              headers: {
+                "X-Riot-Token": RIOT_API_KEY
+              }
+            });
+          }
 
           if (leaderboardResponse.ok) {
             const rawLeaderboard = await leaderboardResponse.json();
